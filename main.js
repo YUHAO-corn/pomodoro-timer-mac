@@ -5,6 +5,10 @@ const fs = require('fs');
 let tray = null;
 let mainWindow = null;
 let timerInterval = null;
+let decisionTimeout = null;
+
+const POMODORO_SECONDS = 25 * 60;
+const DECISION_TIMEOUT_MS = 60 * 1000;
 
 // Timer state
 let state = {
@@ -13,7 +17,8 @@ let state = {
   currentSessionSeconds: 0,
   sessionStart: null,
   todayDate: getTodayString(),
-  sessions: [] // { start, end, duration }
+  sessions: [], // { start, end, duration }
+  waitingForDecision: false
 };
 
 // Data file path
@@ -80,7 +85,7 @@ function updateTray() {
     {
       label: state.isRunning ? '暂停' : '开始',
       click: () => {
-        if (state.isRunning) {
+        if (state.isRunning || state.waitingForDecision) {
           stopTimer();
         } else {
           startTimer();
@@ -101,23 +106,18 @@ function updateTray() {
   tray.setContextMenu(contextMenu);
 }
 
-function startTimer() {
-  if (state.isRunning) return;
+function broadcastState() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('state-update', getStateForRenderer());
+  }
+}
 
-  // Check midnight reset
-  const today = getTodayString();
-  if (today !== state.todayDate) {
-    state.totalSeconds = 0;
-    state.currentSessionSeconds = 0;
-    state.sessions = [];
-    state.todayDate = today;
+function runPomodoroInterval() {
+  if (timerInterval) {
+    clearInterval(timerInterval);
   }
 
-  state.isRunning = true;
-  state.sessionStart = Date.now();
-
   timerInterval = setInterval(() => {
-    // Check midnight reset
     const currentDay = getTodayString();
     if (currentDay !== state.todayDate) {
       state.totalSeconds = 0;
@@ -130,23 +130,35 @@ function startTimer() {
     state.totalSeconds++;
     state.currentSessionSeconds++;
 
-    // Every 25 minutes, show notification
-    if (state.currentSessionSeconds > 0 && state.currentSessionSeconds % (25 * 60) === 0) {
-      showPomodoroNotification();
+    if (state.currentSessionSeconds >= POMODORO_SECONDS) {
+      finishPomodoroCycle();
+      return;
     }
 
     updateTray();
     saveData();
-
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('state-update', getStateForRenderer());
-    }
+    broadcastState();
   }, 1000);
+}
 
-  updateTray();
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('state-update', getStateForRenderer());
+function startTimer() {
+  if (state.isRunning) return;
+
+  const today = getTodayString();
+  if (today !== state.todayDate) {
+    state.totalSeconds = 0;
+    state.currentSessionSeconds = 0;
+    state.sessions = [];
+    state.todayDate = today;
   }
+
+  state.isRunning = true;
+  state.waitingForDecision = false;
+  state.sessionStart = Date.now();
+
+  runPomodoroInterval();
+  updateTray();
+  broadcastState();
 }
 
 function finalizeCurrentSession() {
@@ -159,23 +171,54 @@ function finalizeCurrentSession() {
   });
 }
 
-function advanceToNextPomodoro() {
+function finishPomodoroCycle() {
+  if (state.waitingForDecision) return;
+
+  if (timerInterval) {
+    clearInterval(timerInterval);
+    timerInterval = null;
+  }
+
+  state.isRunning = false;
+  state.waitingForDecision = true;
   finalizeCurrentSession();
-  state.sessionStart = Date.now();
-  state.currentSessionSeconds = 0;
+  state.sessionStart = null;
   saveData();
+  broadcastState();
   updateTray();
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('state-update', getStateForRenderer());
+  showPomodoroNotification();
+}
+
+function clearDecisionTimeout() {
+  if (decisionTimeout) {
+    clearTimeout(decisionTimeout);
+    decisionTimeout = null;
   }
 }
 
-function stopTimer() {
-  if (!state.isRunning) return;
+function startNextPomodoroCycle() {
+  clearDecisionTimeout();
+  state.waitingForDecision = false;
+  state.currentSessionSeconds = 0;
+  state.sessionStart = Date.now();
+  state.isRunning = true;
 
-  clearInterval(timerInterval);
-  timerInterval = null;
+  runPomodoroInterval();
+  updateTray();
+  saveData();
+  broadcastState();
+}
+
+function stopTimer() {
+  clearDecisionTimeout();
+
+  if (timerInterval) {
+    clearInterval(timerInterval);
+    timerInterval = null;
+  }
+
   state.isRunning = false;
+  state.waitingForDecision = false;
 
   finalizeCurrentSession();
   state.sessionStart = null;
@@ -183,9 +226,7 @@ function stopTimer() {
 
   saveData();
   updateTray();
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('state-update', getStateForRenderer());
-  }
+  broadcastState();
 }
 
 function showPomodoroNotification() {
@@ -204,19 +245,20 @@ function showPomodoroNotification() {
 
   let userResponded = false;
 
-  // Auto-advance after 60 seconds if no response
-  const autoAdvanceTimer = setTimeout(() => {
+  clearDecisionTimeout();
+  decisionTimeout = setTimeout(() => {
     if (!userResponded) {
       notification.close();
-      advanceToNextPomodoro();
+      startNextPomodoroCycle();
     }
-  }, 60000);
+  }, DECISION_TIMEOUT_MS);
 
   notification.on('action', (event, index) => {
     userResponded = true;
-    clearTimeout(autoAdvanceTimer);
+    clearDecisionTimeout();
     if (index === 0) {
-      advanceToNextPomodoro();
+      hideMainWindow();
+      startNextPomodoroCycle();
     } else {
       stopTimer();
     }
@@ -224,9 +266,8 @@ function showPomodoroNotification() {
 
   notification.on('close', () => {
     if (!userResponded) {
-      clearTimeout(autoAdvanceTimer);
-      // User manually closed without clicking buttons - treat as "continue"
-      advanceToNextPomodoro();
+      clearDecisionTimeout();
+      startNextPomodoroCycle();
     }
   });
 
@@ -240,8 +281,15 @@ function getStateForRenderer() {
     currentSessionSeconds: state.currentSessionSeconds,
     sessions: state.sessions,
     sessionStart: state.sessionStart,
-    todayDate: state.todayDate
+    todayDate: state.todayDate,
+    waitingForDecision: state.waitingForDecision
   };
+}
+
+function hideMainWindow() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.hide();
+  }
 }
 
 function showMainWindow() {

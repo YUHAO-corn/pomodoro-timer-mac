@@ -1,23 +1,28 @@
 {
-  "name": "analog-pomodoro",
+  "name": "pomodoro-timer-mac",
   "version": "1.0.0",
   "description": "A warmly analog Pomodoro timer for macOS",
+  "author": "Claude",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "build": "electron-builder"
+    "build": "electron-builder",
+    "dist": "electron-builder --mac dmg --universal"
   },
   "build": {
     "appId": "com.analog.pomodoro",
+    "productName": "Pomodoro Timer",
     "mac": {
       "category": "public.app-category.productivity",
-      "target": "dmg"
+      "target": ["dmg"],
+      "artifactName": "Pomodoro Timer-${version}-${arch}.${ext}"
+    },
+    "dmg": {
+      "title": "Pomodoro Timer"
     }
   },
-  "dependencies": {
-    "electron": "^28.0.0"
-  },
   "devDependencies": {
+    "electron": "^28.0.0",
     "electron-builder": "^24.9.1"
   }
 }
