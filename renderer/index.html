@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>番茄钟</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Mono:wght@300;400;500&family=Literata:ital,opsz,wght@0,7..72,300;0,7..72,400;1,7..72,300&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app">
+    <!-- Grain overlay -->
+    <div class="grain"></div>
+
+    <!-- Header -->
+    <header class="header">
+      <div class="header-left">
+        <div class="clock-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="12" r="9.5" stroke="currentColor" stroke-width="1.2"/>
+            <line x1="12" y1="6.5" x2="12" y2="12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" id="hour-hand"/>
+            <line x1="12" y1="12" x2="15.5" y2="12" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" id="minute-hand"/>
+            <circle cx="12" cy="12" r="1" fill="currentColor"/>
+          </svg>
+        </div>
+        <span class="app-name">番茄钟</span>
+      </div>
+      <div class="date-display" id="date-display"></div>
+    </header>
+
+    <!-- Main timer display -->
+    <section class="timer-section">
+      <div class="timer-ring-container">
+        <svg class="timer-ring" viewBox="0 0 200 200">
+          <defs>
+            <filter id="glow">
+              <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+              <feMerge>
+                <feMergeNode in="coloredBlur"/>
+                <feMergeNode in="SourceGraphic"/>
+              </feMerge>
+            </filter>
+          </defs>
+          <!-- Background ring -->
+          <circle cx="100" cy="100" r="82" fill="none" stroke="#E8E1D0" stroke-width="3"/>
+          <!-- Progress ring -->
+          <circle cx="100" cy="100" r="82" fill="none"
+            stroke="#C4624E" stroke-width="3"
+            stroke-linecap="round"
+            stroke-dasharray="515.22"
+            stroke-dashoffset="515.22"
+            transform="rotate(-90 100 100)"
+            id="progress-ring"
+            filter="url(#glow)"/>
+          <!-- Tick marks -->
+          <g id="tick-marks"></g>
+        </svg>
+
+        <div class="timer-inner">
+          <div class="timer-label" id="timer-label">今日专注</div>
+          <div class="timer-display" id="timer-display">00:00</div>
+          <div class="pomodoro-count">
+            <span id="pomodoro-num">0</span>
+            <span class="pomodoro-unit"> 个番茄</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Control button -->
+      <button class="control-btn" id="control-btn" data-state="idle">
+        <div class="btn-icon">
+          <svg class="icon-play" width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M8 5v14l11-7z"/>
+          </svg>
+          <svg class="icon-pause" width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>
+          </svg>
+        </div>
+        <span class="btn-text" id="btn-text">开始专注</span>
+      </button>
+    </section>
+
+    <!-- Divider -->
+    <div class="section-divider">
+      <span>今日轨迹</span>
+    </div>
+
+    <!-- Timeline chart -->
+    <section class="chart-section">
+      <canvas id="timeline-canvas" height="80"></canvas>
+      <div class="chart-labels">
+        <span>00:00</span>
+        <span>06:00</span>
+        <span>12:00</span>
+        <span>18:00</span>
+        <span>24:00</span>
+      </div>
+    </section>
+
+    <!-- Stats row -->
+    <section class="stats-row">
+      <div class="stat-card">
+        <div class="stat-value" id="stat-hours">0h 0m</div>
+        <div class="stat-label">专注时长</div>
+      </div>
+      <div class="stat-divider"></div>
+      <div class="stat-card">
+        <div class="stat-value" id="stat-pomodoros">0</div>
+        <div class="stat-label">完整番茄</div>
+      </div>
+      <div class="stat-divider"></div>
+      <div class="stat-card">
+        <div class="stat-value" id="stat-sessions">0</div>
+        <div class="stat-label">专注次数</div>
+      </div>
+    </section>
+
+    <!-- History navigation -->
+    <section class="history-section">
+      <div class="history-header">
+        <button class="history-nav" id="prev-day">‹</button>
+        <span class="history-date" id="history-date">今天</span>
+        <button class="history-nav" id="next-day" disabled>›</button>
+      </div>
+      <div class="history-bars" id="history-bars">
+        <!-- 7-day mini bars -->
+      </div>
+    </section>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
