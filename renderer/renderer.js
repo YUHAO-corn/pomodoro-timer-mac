@@ -47,7 +47,7 @@ ipcRenderer.on('state-update', (_, state) => {
 
 // ── Control ─────────────────────────────────────────────────
 controlBtn.addEventListener('click', () => {
-  if (appState.isRunning) {
+  if (appState.isRunning || appState.waitingForDecision) {
     ipcRenderer.send('stop-timer');
   } else {
     ipcRenderer.send('start-timer');
@@ -78,6 +78,11 @@ function renderAll() {
     btnText.textContent = '暂停休息';
     timerDisplay.classList.add('running');
     timerRingContainer.classList.add('running');
+  } else if (appState.waitingForDecision) {
+    controlBtn.dataset.state = 'waiting';
+    btnText.textContent = '等待选择';
+    timerDisplay.classList.remove('running');
+    timerRingContainer.classList.remove('running');
   } else {
     controlBtn.dataset.state = 'idle';
     btnText.textContent = '开始专注';
