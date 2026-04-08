@@ -9,7 +9,9 @@ let appState = {
   todayDate: ''
 };
 
-let historyOffset = 0; // 0 = today, 1 = yesterday, etc.
+// View state — which date is currently shown in the panel
+let viewDate = ''; // YYYY-MM-DD, empty = today
+let todayData = null; // always today's live data for the bar chart
 
 // ── DOM refs ────────────────────────────────────────────────
 const timerDisplay  = document.getElementById('timer-display');
@@ -29,12 +31,27 @@ const timerRingContainer = document.querySelector('.timer-ring-container');
 const RING_CIRCUMFERENCE = 2 * Math.PI * 82; // 515.22
 const POMODORO_SECONDS   = 25 * 60;
 
+function getTodayStr() {
+  return new Date().toISOString().split('T')[0];
+}
+
+function getDisplayDate(dateStr) {
+  const d = new Date(dateStr + 'T12:00:00');
+  const today = getTodayStr();
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yStr = yesterday.toISOString().split('T')[0];
+  if (dateStr === today) return '今天';
+  if (dateStr === yStr) return '昨天';
+  return d.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' });
+}
+
 // ── Init ────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', () => {
   renderDate();
-  renderHistoryBars([]);
-  drawTimeline([]);
   ipcRenderer.send('get-state');
+  ipcRenderer.send('get-history');
+  ipcRenderer.send('get-day', getTodayStr());
   startClockHands();
   generateTickMarks();
 });
@@ -42,65 +59,98 @@ window.addEventListener('DOMContentLoaded', () => {
 // ── IPC ─────────────────────────────────────────────────────
 ipcRenderer.on('state-update', (_, state) => {
   appState = state;
-  renderAll();
+  todayData = {
+    totalSeconds: state.totalSeconds,
+    sessions: state.sessions
+  };
+  // Always update live view if viewing today
+  if (!viewDate || viewDate === getTodayStr()) {
+    renderDay({
+      date: getTodayStr(),
+      totalSeconds: state.totalSeconds,
+      currentSessionSeconds: state.currentSessionSeconds,
+      sessions: state.sessions
+    });
+    if (todayData) {
+      const hist = {};
+      hist[getTodayStr()] = todayData;
+      renderHistoryBars(hist);
+    }
+  }
 });
+
+ipcRenderer.on('history-data', (_, history) => {
+  renderHistoryBars(history);
+});
+
+ipcRenderer.on('day-data', (_, data) => {
+  renderDay(data);
+});
+
+function renderDay(data) {
+  viewDate = data.date || viewDate;
+  nextDayBtn.disabled = viewDate === getTodayStr();
+
+  historyDate.textContent = getDisplayDate(viewDate);
+
+  // Stats for this day
+  const totalSecs = data.totalSeconds || 0;
+  const pomodoros = Math.floor(totalSecs / POMODORO_SECONDS);
+  const totalMin = Math.floor(totalSecs / 60);
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  statHours.textContent     = h > 0 ? `${h}h ${m}m` : `${m}m`;
+  statPomodoros.textContent = pomodoros;
+  statSessions.textContent  = (data.sessions || []).length;
+
+  timerDisplay.textContent = formatTime(totalSecs);
+  pomodoroNum.textContent = pomodoros;
+
+  const sessionSecs = totalSecs % POMODORO_SECONDS;
+  const progress = sessionSecs / POMODORO_SECONDS;
+  const offset = RING_CIRCUMFERENCE * (1 - progress);
+  progressRing.style.strokeDashoffset = offset;
+
+  drawTimeline(data.sessions || [], viewDate);
+
+  // Button — only active when viewing today
+  const isToday = viewDate === getTodayStr();
+  if (isToday) {
+    if (appState.isRunning) {
+      controlBtn.dataset.state = 'running';
+      btnText.textContent = '暂停休息';
+      timerDisplay.classList.add('running');
+      timerRingContainer.classList.add('running');
+    } else if (appState.waitingForDecision) {
+      controlBtn.dataset.state = 'waiting';
+      btnText.textContent = '等待选择';
+      timerDisplay.classList.remove('running');
+      timerRingContainer.classList.remove('running');
+    } else {
+      controlBtn.dataset.state = 'idle';
+      btnText.textContent = '开始专注';
+      timerDisplay.classList.remove('running');
+      timerRingContainer.classList.remove('running');
+    }
+    controlBtn.disabled = false;
+  } else {
+    controlBtn.dataset.state = 'idle';
+    btnText.textContent = '查看历史';
+    timerDisplay.classList.remove('running');
+    timerRingContainer.classList.remove('running');
+    controlBtn.disabled = true;
+  }
+}
 
 // ── Control ─────────────────────────────────────────────────
 controlBtn.addEventListener('click', () => {
+  if (viewDate && viewDate !== getTodayStr()) return; // disabled for past dates
   if (appState.isRunning || appState.waitingForDecision) {
     ipcRenderer.send('stop-timer');
   } else {
     ipcRenderer.send('start-timer');
   }
 });
-
-// ── Render ──────────────────────────────────────────────────
-function renderAll() {
-  const totalSecs = appState.totalSeconds;
-  const sessionSecs = appState.currentSessionSeconds || totalSecs;
-
-  // Main panel shows total daily focus time
-  timerDisplay.textContent = formatTime(totalSecs);
-
-  // Pomodoros based on total daily focus time
-  const pomodoros = Math.floor(totalSecs / POMODORO_SECONDS);
-  pomodoroNum.textContent = pomodoros;
-
-  // Progress ring — shows progress within current 25-min segment
-  const segmentSecs = sessionSecs % POMODORO_SECONDS;
-  const progress    = segmentSecs / POMODORO_SECONDS;
-  const offset      = RING_CIRCUMFERENCE * (1 - progress);
-  progressRing.style.strokeDashoffset = offset;
-
-  // Button state
-  if (appState.isRunning) {
-    controlBtn.dataset.state = 'running';
-    btnText.textContent = '暂停休息';
-    timerDisplay.classList.add('running');
-    timerRingContainer.classList.add('running');
-  } else if (appState.waitingForDecision) {
-    controlBtn.dataset.state = 'waiting';
-    btnText.textContent = '等待选择';
-    timerDisplay.classList.remove('running');
-    timerRingContainer.classList.remove('running');
-  } else {
-    controlBtn.dataset.state = 'idle';
-    btnText.textContent = '开始专注';
-    timerDisplay.classList.remove('running');
-    timerRingContainer.classList.remove('running');
-  }
-
-  // Stats
-  const totalMin = Math.floor(totalSecs / 60);
-  const h  = Math.floor(totalMin / 60);
-  const m  = totalMin % 60;
-  statHours.textContent     = h > 0 ? `${h}h ${m}m` : `${m}m`;
-  statPomodoros.textContent = pomodoros;
-  statSessions.textContent  = appState.sessions.length + (appState.isRunning ? 1 : 0);
-
-  // Timeline
-  drawTimeline(appState.sessions);
-}
 
 // ── Format time ─────────────────────────────────────────────
 function formatTime(seconds) {
@@ -179,7 +229,7 @@ function generateTickMarks() {
 }
 
 // ── Timeline Canvas ──────────────────────────────────────────
-function drawTimeline(sessions) {
+function drawTimeline(sessions, timelineDate) {
   const canvas = document.getElementById('timeline-canvas');
   const dpr    = window.devicePixelRatio || 1;
   const W      = canvas.offsetWidth || 424;
@@ -195,32 +245,30 @@ function drawTimeline(sessions) {
   roundRect(ctx, 0, 0, W, H, 8);
   ctx.fill();
 
-  const dayStart = new Date();
-  dayStart.setHours(0, 0, 0, 0);
+  const tlDate = timelineDate || getTodayStr();
+  const dayStart = new Date(tlDate + 'T00:00:00');
   const dayMs    = 24 * 60 * 60 * 1000;
 
   // Draw sessions as filled areas
   sessions.forEach(session => {
     const startRatio = (session.start - dayStart.getTime()) / dayMs;
     const endRatio   = (session.end   - dayStart.getTime()) / dayMs;
-    const x1 = startRatio * W;
-    const x2 = endRatio   * W;
+    const x1 = Math.max(0, startRatio) * W;
+    const x2 = Math.min(1, endRatio)   * W;
     const barW = Math.max(x2 - x1, 2);
 
-    // Warm terracotta fill with gradient
     const grad = ctx.createLinearGradient(0, 0, 0, H);
     grad.addColorStop(0, 'rgba(196,98,78,0.5)');
     grad.addColorStop(1, 'rgba(196,98,78,0.15)');
     ctx.fillStyle = grad;
     ctx.fillRect(x1, 0, barW, H);
 
-    // Top line accent
     ctx.fillStyle = '#C4624E';
     ctx.fillRect(x1, 0, barW, 2);
   });
 
-  // If currently running, add live segment using sessionStart from main process
-  if (appState.isRunning && appState.sessionStart) {
+  // If currently running and viewing today, add live segment
+  if (appState.isRunning && appState.sessionStart && tlDate === getTodayStr()) {
     const now            = Date.now();
     const liveStartRatio = (appState.sessionStart - dayStart.getTime()) / dayMs;
     const liveEndRatio   = (now - dayStart.getTime()) / dayMs;
@@ -249,17 +297,19 @@ function drawTimeline(sessions) {
     ctx.stroke();
   }
 
-  // Current time marker
-  const nowRatio = (Date.now() - dayStart.getTime()) / dayMs;
-  const nowX     = nowRatio * W;
-  ctx.strokeStyle = 'rgba(196,98,78,0.5)';
-  ctx.lineWidth   = 1.5;
-  ctx.setLineDash([3, 3]);
-  ctx.beginPath();
-  ctx.moveTo(nowX, 0);
-  ctx.lineTo(nowX, H);
-  ctx.stroke();
-  ctx.setLineDash([]);
+  // Current time marker — only for today
+  if (tlDate === getTodayStr()) {
+    const nowRatio = (Date.now() - dayStart.getTime()) / dayMs;
+    const nowX     = nowRatio * W;
+    ctx.strokeStyle = 'rgba(196,98,78,0.5)';
+    ctx.lineWidth   = 1.5;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(nowX, 0);
+    ctx.lineTo(nowX, H);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
 }
 
 function roundRect(ctx, x, y, w, h, r) {
@@ -283,26 +333,25 @@ function renderHistoryBars(historyData) {
 
   const days  = 7;
   const today = new Date();
+  const todayStr = getTodayStr();
+
+  // Ensure today is in history data
+  const data = Object.assign({}, historyData);
+  if (todayData) {
+    data[todayStr] = todayData;
+  }
 
   // Find max for scaling
-  const maxSecs = Math.max(
-    8 * 3600,
-    ...Object.values(historyData).map(d => d.totalSeconds || 0)
-  );
+  const allSecs = Object.values(data).map(d => d.totalSeconds || 0);
+  const maxSecs = Math.max(8 * 3600, ...allSecs, 0);
 
   for (let i = days - 1; i >= 0; i--) {
     const date = new Date(today);
     date.setDate(date.getDate() - i);
     const dateStr = date.toISOString().split('T')[0];
 
-    let secs = 0;
-    if (i === 0) {
-      secs = appState.totalSeconds || 0;
-    } else if (historyData[dateStr]) {
-      secs = historyData[dateStr].totalSeconds || 0;
-    }
-
-    const ratio = Math.min(secs / maxSecs, 1);
+    const secs = data[dateStr] ? data[dateStr].totalSeconds : 0;
+    const ratio = maxSecs > 0 ? Math.min(secs / maxSecs, 1) : 0;
 
     const group = document.createElement('div');
     group.className = 'history-bar-group';
@@ -329,33 +378,32 @@ function renderHistoryBars(historyData) {
 
 // ── History navigation ───────────────────────────────────────
 prevDayBtn.addEventListener('click', () => {
-  historyOffset = Math.min(historyOffset + 1, 6);
-  updateHistoryView();
+  const prev = getPrevDateStr(viewDate || getTodayStr());
+  ipcRenderer.send('get-day', prev);
 });
 
 nextDayBtn.addEventListener('click', () => {
-  historyOffset = Math.max(historyOffset - 1, 0);
-  updateHistoryView();
+  const next = getNextDateStr(viewDate || getTodayStr());
+  ipcRenderer.send('get-day', next);
 });
 
-function updateHistoryView() {
-  nextDayBtn.disabled = historyOffset === 0;
+function getPrevDateStr(from) {
+  const d = new Date(from + 'T12:00:00');
+  d.setDate(d.getDate() - 1);
+  return d.toISOString().split('T')[0];
+}
 
-  const date = new Date();
-  date.setDate(date.getDate() - historyOffset);
-
-  if (historyOffset === 0) {
-    historyDate.textContent = '今天';
-  } else if (historyOffset === 1) {
-    historyDate.textContent = '昨天';
-  } else {
-    historyDate.textContent = date.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' });
-  }
+function getNextDateStr(from) {
+  const today = getTodayStr();
+  const d = new Date(from + 'T12:00:00');
+  d.setDate(d.getDate() + 1);
+  const next = d.toISOString().split('T')[0];
+  return next <= today ? next : today;
 }
 
 // Redraw timeline every 30 seconds
 setInterval(() => {
-  if (appState.isRunning) {
-    drawTimeline(appState.sessions);
+  if (appState.isRunning && (!viewDate || viewDate === getTodayStr())) {
+    drawTimeline(appState.sessions, getTodayStr());
   }
 }, 30000);

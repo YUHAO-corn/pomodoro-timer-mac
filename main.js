@@ -20,9 +20,10 @@ let state = {
   waitingForDecision: false
 };
 
-// Data file path
+// Data file path — each day gets its own file
 const sharedDataDir = path.join(app.getPath('appData'), 'Pomodoro Timer');
-const dataPath = path.join(sharedDataDir, 'pomodoro-data.json');
+const dataDir = path.join(sharedDataDir, 'data');
+const todayPath = path.join(dataDir, 'today.json');
 const legacyDataPaths = [
   path.join(app.getPath('appData'), 'analog-pomodoro', 'pomodoro-data.json')
 ];
@@ -31,29 +32,48 @@ function getTodayString() {
   return new Date().toISOString().split('T')[0];
 }
 
-function loadData() {
-  try {
-    const sourcePath = [dataPath, ...legacyDataPaths].find(filePath => fs.existsSync(filePath));
-    if (!sourcePath) return;
+function dayFilePath(dateStr) {
+  return path.join(dataDir, `${dateStr}.json`);
+}
 
+function loadDay(dateStr) {
+  // Try today file, then date-specific file, then legacy
+  const candidates = dateStr === getTodayString()
+    ? [todayPath, dayFilePath(dateStr)]
+    : [dayFilePath(dateStr)];
+  candidates.push(...legacyDataPaths);
+
+  const sourcePath = candidates.find(p => fs.existsSync(p));
+  if (!sourcePath) return null;
+
+  try {
     const raw = fs.readFileSync(sourcePath, 'utf-8');
     const data = JSON.parse(raw);
+    return {
+      totalSeconds: data.totalSeconds || 0,
+      currentSessionSeconds: data.currentSessionSeconds || 0,
+      sessions: data.sessions || [],
+      date: data.date || dateStr
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
+function loadData() {
+  try {
     const today = getTodayString();
-    if (data.date === today) {
-      state.totalSeconds = data.totalSeconds || 0;
-      state.currentSessionSeconds = data.currentSessionSeconds || 0;
-      state.sessions = data.sessions || [];
+    const dayData = loadDay(today);
+    if (dayData) {
+      state.totalSeconds = dayData.totalSeconds;
+      state.currentSessionSeconds = dayData.currentSessionSeconds;
+      state.sessions = dayData.sessions;
     } else {
-      // New day — reset
       state.totalSeconds = 0;
       state.currentSessionSeconds = 0;
       state.sessions = [];
     }
     state.todayDate = today;
-
-    if (sourcePath !== dataPath) {
-      saveData();
-    }
   } catch (e) {
     console.error('Failed to load data:', e);
   }
@@ -61,14 +81,18 @@ function loadData() {
 
 function saveData() {
   try {
-    fs.mkdirSync(sharedDataDir, { recursive: true });
+    fs.mkdirSync(dataDir, { recursive: true });
+    const today = getTodayString();
     const data = {
-      date: getTodayString(),
+      date: today,
       totalSeconds: state.totalSeconds,
       currentSessionSeconds: state.currentSessionSeconds,
       sessions: state.sessions
     };
-    fs.writeFileSync(dataPath, JSON.stringify(data, null, 2));
+    // Always write to today.json
+    fs.writeFileSync(todayPath, JSON.stringify(data, null, 2));
+    // Also write date-specific copy for history
+    fs.writeFileSync(dayFilePath(today), JSON.stringify(data, null, 2));
   } catch (e) {
     console.error('Failed to save data:', e);
   }
@@ -387,19 +411,55 @@ app.whenReady().then(() => {
     event.reply('state-update', getStateForRenderer());
   });
   ipcMain.on('get-history', (event) => {
-    // Load all historical data
     const history = loadHistory();
     event.reply('history-data', history);
   });
+
+  ipcMain.on('get-day', (event, dateStr) => {
+    const data = loadDay(dateStr);
+    if (data) {
+      event.reply('day-data', data);
+    } else {
+      event.reply('day-data', { date: dateStr, totalSeconds: 0, sessions: [] });
+    }
+  });
+
+  ipcMain.on('get-available-dates', (event) => {
+    const dates = getAvailableDates();
+    event.reply('available-dates', dates);
+  });
 });
+
+function getAvailableDates() {
+  try {
+    if (!fs.existsSync(dataDir)) return [getTodayString()];
+    const files = fs.readdirSync(dataDir).filter(f => f.endsWith('.json'));
+    const dates = files
+      .map(f => f.replace('.json', ''))
+      .filter(d => d !== 'today')
+      .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d));
+    dates.sort().reverse();
+    if (!dates.includes(getTodayString())) {
+      dates.unshift(getTodayString());
+    }
+    return dates;
+  } catch (e) {
+    return [getTodayString()];
+  }
+}
 
 function loadHistory() {
   const history = {};
-  const today = getTodayString();
-  history[today] = {
-    totalSeconds: state.totalSeconds,
-    sessions: state.sessions
-  };
+  const dates = getAvailableDates();
+  for (const dateStr of dates) {
+    const data = loadDay(dateStr);
+    if (data) {
+      history[dateStr] = {
+        totalSeconds: data.totalSeconds,
+        sessions: data.sessions
+      };
+    }
+  }
   return history;
 }
 
